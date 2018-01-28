@@ -1,0 +1,204 @@
+import mraa
+import sys
+from datetime import datetime
+from datetime import timedelta
+from threading import Timer
+import time
+import upm
+from upm import pyupm_uln200xa as upm
+from upm import pyupm_ttp223 as touch
+from upm import pyupm_jhd1313m1 as lcd
+from enum import Enum
+import urllib
+
+u = upm.ULN200XA(4096, 23,24,25,26)
+m1 = mraa.Gpio(23)
+m2 = mraa.Gpio(24)
+m3 = mraa.Gpio(25)
+m4 = mraa.Gpio(26)
+m1.dir(mraa.DIR_OUT)
+m2.dir(mraa.DIR_OUT)
+m3.dir(mraa.DIR_OUT)
+m4.dir(mraa.DIR_OUT)
+led = mraa.Gpio(23) #basically pinmode
+led.dir(mraa.DIR_OUT) #Means OUTPUT so that it sends signals out
+t1 = mraa.Gpio(33)
+t1.dir(mraa.DIR_IN)
+
+touch1 = mraa.Gpio(31)
+touch2 = mraa.Gpio(29)
+touch3 = mraa.Gpio(27)
+touch1.dir(mraa.DIR_IN)
+touch2.dir(mraa.DIR_IN)
+touch3.dir(mraa.DIR_IN)
+
+#URL to send the text messages with
+URL = "https://tinioso.lib.id/alzheimer-service@dev/?tel=16478120176&msg=Take yo                                                                                                                                                             ur medicine"
+URL2 = "https://tinioso.lib.id/alzheimer-service@dev/?tel=16478120176&msg=The me                                                                                                                                                             dication was not taken!"
+
+#Date with a default test time of 20s from start of execution
+DAY = datetime.now().day
+YEAR = 2018
+MONTH = 1
+HOUR = datetime.now().hour
+MINUTE = datetime.now().minute + (datetime.now().second + 20) / 60
+SECOND = (datetime.now().second + 20) % 60
+date = datetime(YEAR, MONTH, DAY, HOUR, MINUTE, SECOND)
+
+#Boolean to check whether or not the medication has been taken
+hasTaken = True
+#Boolean to represent whether modification mode is on
+isModifying = False
+
+#The LCD, which uses I2C
+myLcd = lcd.Jhd1313m1(0) #Default I2C bus of 0
+
+#global times
+t =0
+t2 = 0
+
+###############FUNCTION DECLARATIONS###########
+
+def notifyNotTaken():
+    print(hasTaken)
+    if(hasTaken == False):
+        print("Medication not Taken!")
+        urllib.urlopen(URL2)
+
+def updateLCD():
+        global myLcd
+        myLcd.clear()
+        myLcd.write("Next Treatment On")
+        myLcd.setCursor(1,0)
+        myLcd.write(date.strftime("%m-%d %H:%M"))
+
+
+#Run the motor rotation
+def dispense():
+    global date
+    global myLcd
+
+    if(hasTaken == True):
+        moveStepperMotor()
+    else:
+        print("Did not take last meds!")
+
+    myLcd.clear()
+    myLcd.write("Medication")
+    myLcd.setCursor(1,0)
+    myLcd.write("Ready!")
+
+    global t2
+    global hasTaken
+
+    #Increment by 1 day
+    dt = timedelta(minutes = 1)
+    date = date + dt
+    updateLCD()
+
+    hasTaken = False
+
+    #Flash the notice for 30s, and if the pill is not taken then
+    #notify the family
+    current = time.time()
+    while (time.time() - current < 10) & (hasTaken == False):
+        myLcd.setColor(0,255,0)
+        time.sleep(1)
+        myLcd.setColor(255, 255, 255)
+        time.sleep(1)
+    notifyNotTaken()
+
+    next = datetime(YEAR, MONTH, DAY, HOUR, MINUTE, SECOND)
+    print(getSecondsToNext(date))
+
+    global t
+
+    urllib.urlopen(URL);
+    t = Timer(getSecondsToNext(date), dispense)
+    t.start();
+
+#Interrupt function that just toggles a flag variable so that an automatic SMS i                                                                                                                                                             s not sent
+def notifyHasTaken(gpio):
+    print("Medication has been taken!")
+    global hasTaken
+    hasTaken = True
+    print(hasTaken)
+
+#Get the time delay until our next dispensing. Execute this whenever time is adj                                                                                                                                                             usted
+def getSecondsToNext(futureTime):
+    return (futureTime - datetime.now()).total_seconds()
+#Creates a timedelta object that can be used to find seconds remaining
+
+#Spin the stepper motor one rotation hopefully.
+def moveStepperMotor():
+    u.stepperSteps(4096)
+
+
+def increaseHours(gpio):
+    global isModifying
+    if(isModifying == False):
+        return
+    global date
+    #Timedelta set for 1 hour later
+    d = timedelta(hours=1)
+    date = date + d
+    print("time updated")
+    updateLCD()
+
+def increaseMinutes(gpio):
+    #Only run if we're modifying
+    global isModifying
+    if(isModifying == False):
+        return
+    global date
+    print("time updated")
+    d = timedelta(minutes=1)
+    date = date + d
+    updateLCD()
+
+#Start time adjustments
+def startModify(gpio):
+    global isModifying
+    print("Modification Event!")
+    global myLcd
+    global t
+    global t2
+    if(isModifying == False):
+        isModifying = True
+        myLcd.cursorOn()
+        t.cancel() #Stop all timers going on in the meantime
+        t2.cancel()
+    else:
+        myLcd.cursorOff()
+        #When stopping the "modification" button, cancel interrupts
+        isModifying = False
+        #Then start up the timers again
+        print(getSecondsToNext(date))
+        t = Timer(getSecondsToNext(date), dispense) #Restart the timer
+        t.start()
+
+##############SETUP CODE######################
+
+u.setSpeed(150) #Set rotation speed beforehand
+
+#Setup a listener for the fingerprint sensor that checks if the meds are taken
+t1.isr( mraa.EDGE_RISING, notifyHasTaken, t1)
+#Setup listeners for the touch buttons
+touch1.isr(mraa.EDGE_RISING, startModify, touch1)
+touch2.isr(mraa.EDGE_RISING, increaseMinutes, touch2)
+touch3.isr(mraa.EDGE_RISING, increaseHours, touch2)
+
+#LCD Setup
+#Write color data
+myLcd.backlightOn()
+myLcd.setColor(255, 255, 255)
+myLcd.write("Next Treatment")
+myLcd.setCursor(1,0)
+myLcd.write(datetime.now().strftime("%m-%d %H:%M"))
+
+t = Timer(getSecondsToNext(date), dispense)
+t.start()
+esc = raw_input("Press ENTER to exit")
+#t.cancel()
+#t2.cancel()
+sys.exit()
