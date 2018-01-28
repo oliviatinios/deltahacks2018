@@ -3,15 +3,14 @@ const lib = require('lib')({token: "YEfYw21Fl5DUWW5m5cWhasQtJXxFRhv72vRNCgpEBGvF
 /**
 * Sends a text to the given phone number
 * @param {string} tel Recipient's telephone number
+* @param {string} msg Message to be sent
 * @returns {any}
 */
-module.exports = (tel, context, callback) => {
+module.exports = (tel, msg, context, callback) => {
 	
-	
-
 	lib.utils.sms({
 			to: tel,
-			body: 'Time to take your medicine'
+			body: msg
 		},(err,result)=>{
 			callback(err,result);
 	});
